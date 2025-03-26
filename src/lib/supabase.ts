@@ -114,10 +114,24 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error('Missing Supabase environment variables');
 }
 
-export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: true,
+    flowType: 'pkce',
+    storage: window.localStorage,
+    storageKey: 'fam-assist-auth',
+  },
+  global: {
+    headers: {
+      'X-Client-Info': 'fam-assist-webapp'
+    }
+  }
+});
 
 // Helper functions for authentication
-export const signInWithGoogle = async () => {
+export async function signInWithGoogle() {
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
@@ -126,7 +140,7 @@ export const signInWithGoogle = async () => {
   });
   
   return { data, error };
-};
+}
 
 export const signInWithEmail = async (email: string, password: string) => {
   const { data, error } = await supabase.auth.signInWithPassword({
