@@ -19,6 +19,7 @@ import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 import Login from "./pages/Login";
 import AuthCallback from "./pages/AuthCallback";
+import ShareList from './pages/ShareList';
 
 // Create a reusable component for translating text
 interface TranslatedTextProps {
@@ -121,6 +122,8 @@ export default function App() {
                       </div>
                     </ProtectedRoute>
                   } />
+                  
+                  <Route path="/share-list/:id" element={<ShareList />} />
                   
                   <Route path="*" element={<NotFound />} />
                 </Routes>

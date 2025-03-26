@@ -30,4 +30,23 @@ export interface ProductSearchResponse {
   page: number;
   pageSize: number;
   hasMore: boolean;
+}
+
+export interface Collaborator {
+  email: string;
+  permissions: 'read' | 'write' | 'admin';
+  status: 'pending' | 'active';
+  addedAt: string;
+  lastActivity?: string;
+}
+
+export interface ListActivity {
+  id: string;
+  listId: string;
+  userId: string;
+  userEmail: string;
+  action: 'added' | 'removed' | 'updated' | 'checked' | 'unchecked';
+  itemName?: string;
+  timestamp: string;
+  itemId?: string;
 } 

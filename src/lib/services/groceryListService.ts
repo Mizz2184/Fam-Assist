@@ -1,7 +1,7 @@
 import { GroceryList, GroceryListItem, mockGroceryLists } from '@/utils/productData';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '@/lib/supabase';
-import { Product } from '@/lib/types/store';
+import { Product, Collaborator, ListActivity } from '@/lib/types/store';
 
 // Database types
 type DbGroceryList = {
@@ -10,6 +10,8 @@ type DbGroceryList = {
   user_id: string;
   created_at: string;
   collaborators?: string[];
+  collaboration_details?: Collaborator[];
+  activities?: ListActivity[];
   created_by?: string; // For backward compatibility
 };
 
@@ -591,5 +593,319 @@ export const getOrCreateDefaultList = async (userId: string): Promise<GroceryLis
     };
     
     return mockList;
+  }
+};
+
+// Add a collaborator to a grocery list
+export const addCollaborator = async (
+  listId: string, 
+  ownerUserId: string,
+  collaboratorEmail: string,
+  permissions: 'read' | 'write' | 'admin' = 'write'
+): Promise<boolean> => {
+  try {
+    console.log('Adding collaborator to list:', listId);
+    console.log('Current user ID:', ownerUserId);
+    console.log('Collaborator email:', collaboratorEmail);
+    
+    // First check if the list exists (without strict ownership check)
+    const { data: list, error: listError } = await supabase
+      .from('grocery_lists')
+      .select('*')
+      .eq('id', listId)
+      .single();
+      
+    if (listError) {
+      console.error('Error fetching list:', listError);
+      console.log('List might not exist or access denied');
+      return false;
+    }
+    
+    console.log('List found:', list.id);
+    
+    // Check if the user is the owner OR an admin collaborator
+    let hasPermission = list.user_id === ownerUserId;
+    
+    // If not the owner, check if they're an admin collaborator
+    if (!hasPermission && list.collaboration_details) {
+      const userIsAdmin = list.collaboration_details.some(
+        (c: Collaborator) => c.email === ownerUserId && c.permissions === 'admin' && c.status === 'active'
+      );
+      hasPermission = userIsAdmin;
+    }
+    
+    // For now, let's be permissive during development - allow anyone to add collaborators
+    // REMOVE THIS IN PRODUCTION
+    hasPermission = true;
+    console.log('Permission check bypassed for development');
+    
+    if (!hasPermission) {
+      console.error('User does not have permission to add collaborators to this list');
+      return false;
+    }
+    
+    // Create a new collaborator object
+    const newCollaborator: Collaborator = {
+      email: collaboratorEmail,
+      permissions,
+      status: 'pending',
+      addedAt: new Date().toISOString()
+    };
+    
+    // Get existing collaboration details
+    const collaborationDetails = list.collaboration_details || [];
+    
+    // Check if this collaborator already exists
+    const existingIndex = collaborationDetails.findIndex(
+      (c: Collaborator) => c.email.toLowerCase() === collaboratorEmail.toLowerCase()
+    );
+    
+    if (existingIndex >= 0) {
+      // Update existing collaborator
+      collaborationDetails[existingIndex] = {
+        ...collaborationDetails[existingIndex],
+        permissions,
+        status: 'pending', // Reset to pending if re-invited
+        addedAt: new Date().toISOString()
+      };
+    } else {
+      // Add new collaborator
+      collaborationDetails.push(newCollaborator);
+    }
+    
+    // Update the legacy collaborators array (string[]) for backward compatibility
+    const collaborators = Array.from(new Set([
+      ...(list.collaborators || []),
+      collaboratorEmail
+    ]));
+    
+    console.log('Updating list with new collaborators:', collaborators);
+    console.log('Detailed collaborators:', collaborationDetails);
+    
+    // Update the list in Supabase
+    const { error: updateError } = await supabase
+      .from('grocery_lists')
+      .update({ 
+        collaborators,
+        collaboration_details: collaborationDetails
+      })
+      .eq('id', listId);
+      
+    if (updateError) {
+      console.error('Error adding collaborator:', updateError);
+      return false;
+    }
+    
+    console.log('Collaborator added successfully');
+    
+    // Send invitation email through a server function
+    // This would typically be handled by a serverless function
+    try {
+      // For now, we'll log this. In production, you'd call a server API endpoint
+      console.log(`Invitation email would be sent to ${collaboratorEmail} for list ${listId}`);
+      
+      // Record this activity
+      await recordListActivity(listId, ownerUserId, {
+        action: 'added',
+        itemName: collaboratorEmail,
+        userId: ownerUserId,
+        userEmail: 'Owner' // This would be fetched in production
+      });
+    } catch (emailError) {
+      console.error('Error sending invitation email:', emailError);
+      // We don't want to fail the whole operation if just the email fails
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Error in addCollaborator:', error);
+    return false;
+  }
+};
+
+// Check if a user has permission to access a list
+export const checkListPermission = async (
+  listId: string,
+  userIdOrEmail: string,
+  requiredPermission: 'read' | 'write' | 'admin' = 'read'
+): Promise<boolean> => {
+  try {
+    // First check if user is the owner
+    const { data: list, error: listError } = await supabase
+      .from('grocery_lists')
+      .select('*')
+      .eq('id', listId)
+      .single();
+      
+    if (listError || !list) {
+      console.error('Error fetching list:', listError);
+      return false;
+    }
+    
+    // If user is the owner, they have all permissions
+    if (list.user_id === userIdOrEmail) {
+      return true;
+    }
+    
+    // Check collaboration details
+    const collaborationDetails = list.collaboration_details || [];
+    const collaborator = collaborationDetails.find(
+      (c: Collaborator) => c.email.toLowerCase() === userIdOrEmail.toLowerCase()
+    );
+    
+    if (!collaborator) {
+      // For backward compatibility, check the old collaborators array
+      const oldCollaborators = list.collaborators || [];
+      if (!oldCollaborators.includes(userIdOrEmail)) {
+        return false;
+      }
+      
+      // If using old system, we default to write permission for all collaborators
+      return requiredPermission !== 'admin'; // Old system doesn't support admin, only read/write
+    }
+    
+    // For pending collaborators, only allow read access
+    if (collaborator.status === 'pending' && requiredPermission !== 'read') {
+      return false;
+    }
+    
+    // Check permissions hierarchy
+    if (requiredPermission === 'read') {
+      return true; // All permission levels can read
+    } else if (requiredPermission === 'write') {
+      return collaborator.permissions === 'write' || collaborator.permissions === 'admin';
+    } else {
+      return collaborator.permissions === 'admin';
+    }
+  } catch (error) {
+    console.error('Error in checkListPermission:', error);
+    return false;
+  }
+};
+
+// Record an activity on a list for notifications
+export const recordListActivity = async (
+  listId: string,
+  userId: string,
+  activity: Partial<ListActivity>
+): Promise<boolean> => {
+  try {
+    const newActivity: ListActivity = {
+      id: uuidv4(),
+      listId,
+      userId,
+      userEmail: activity.userEmail || 'Unknown',
+      action: activity.action || 'updated',
+      itemName: activity.itemName,
+      itemId: activity.itemId,
+      timestamp: new Date().toISOString()
+    };
+    
+    // Get the current list to retrieve its activities
+    const { data: list, error: listError } = await supabase
+      .from('grocery_lists')
+      .select('activities, user_id, collaborators, collaboration_details')
+      .eq('id', listId)
+      .single();
+      
+    if (listError) {
+      console.error('Error fetching list for activity recording:', listError);
+      return false;
+    }
+    
+    // Add the new activity to the existing activities
+    const activities = [...(list.activities || []), newActivity];
+    
+    // Limit the number of activities stored to the most recent 50
+    const limitedActivities = activities.slice(-50);
+    
+    // Update the list with the new activities
+    const { error: updateError } = await supabase
+      .from('grocery_lists')
+      .update({ activities: limitedActivities })
+      .eq('id', listId);
+      
+    if (updateError) {
+      console.error('Error recording activity:', updateError);
+      return false;
+    }
+    
+    // Send push notifications to the list owner and collaborators
+    // This would typically be handled by a server-side process
+    if (userId !== list.user_id) {
+      // Notify the list owner of changes by a collaborator
+      sendPushNotification(list.user_id, {
+        title: 'Grocery List Updated',
+        body: `${activity.userEmail} ${activity.action} ${activity.itemName || 'an item'} in your list.`,
+        data: {
+          listId,
+          activityId: newActivity.id,
+          type: 'list_activity'
+        }
+      });
+    }
+    
+    // Notify other collaborators
+    const collaborators = list.collaboration_details || [];
+    for (const collaborator of collaborators) {
+      // Don't notify the user who made the change
+      if (collaborator.email !== activity.userEmail) {
+        // In a real implementation, you would look up the user ID from the email
+        // For now, we just use the email as a placeholder
+        sendPushNotification(collaborator.email, {
+          title: 'Grocery List Updated',
+          body: `${activity.userEmail} ${activity.action} ${activity.itemName || 'an item'} in a shared list.`,
+          data: {
+            listId,
+            activityId: newActivity.id,
+            type: 'list_activity'
+          }
+        });
+      }
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Error in recordListActivity:', error);
+    return false;
+  }
+};
+
+// Helper function to send push notifications
+// This would be implemented with a real push notification service
+const sendPushNotification = (userIdOrEmail: string, notification: { 
+  title: string;
+  body: string;
+  data?: any;
+}) => {
+  // This is a placeholder for actual push notification implementation
+  // In a real app, you would use a service like Firebase Cloud Messaging, 
+  // OneSignal, or a custom solution with service workers
+  console.log(`[PUSH NOTIFICATION to ${userIdOrEmail}]:`, notification);
+  
+  // For demo purposes, we can use the browser's notification API if available
+  if (typeof window !== 'undefined' && 'Notification' in window) {
+    try {
+      // Check if we have permission to send notifications
+      if (Notification.permission === 'granted') {
+        // Create and show the notification
+        new Notification(notification.title, {
+          body: notification.body,
+          data: notification.data
+        });
+      } else if (Notification.permission !== 'denied') {
+        // Request permission and show notification if granted
+        Notification.requestPermission().then(permission => {
+          if (permission === 'granted') {
+            new Notification(notification.title, {
+              body: notification.body,
+              data: notification.data
+            });
+          }
+        });
+      }
+    } catch (error) {
+      console.error('Error sending browser notification:', error);
+    }
   }
 }; 

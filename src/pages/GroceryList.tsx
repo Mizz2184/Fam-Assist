@@ -27,13 +27,27 @@ import {
   Settings,
   Plus,
   Search,
-  ArrowLeft
+  ArrowLeft,
+  Bell,
+  BellOff
 } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import { getUserGroceryLists, getOrCreateDefaultList } from "@/lib/services/groceryListService";
 import { supabase } from "@/lib/supabase";
 import { convertCRCtoUSD } from "@/utils/currencyUtils";
+import CollaboratorInvite from "@/components/CollaboratorInvite";
+import CollaboratorsList from "@/components/CollaboratorsList";
+import { Collaborator } from "@/lib/types/store";
+import { useNotifications } from "@/hooks/useNotifications";
+import { recordListActivity, addCollaborator, checkListPermission } from "@/lib/services/groceryListService";
+import { formatDistanceToNow } from "date-fns";
+import { 
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle
+} from "@/components/ui/dialog";
 
 // Current exchange rate (this would normally come from an API or context)
 const CRC_TO_USD_RATE = 510;
@@ -48,6 +62,17 @@ const GroceryList = () => {
   const [loading, setLoading] = useState(true);
   const [collaboratorEmail, setCollaboratorEmail] = useState("");
   const [addingCollaborator, setAddingCollaborator] = useState(false);
+  const [showCollaboratorInvite, setShowCollaboratorInvite] = useState(false);
+  const [showCollaboratorsList, setShowCollaboratorsList] = useState(false);
+  const [detailedCollaborators, setDetailedCollaborators] = useState<Collaborator[]>([]);
+  const [isLoadingCollaborators, setIsLoadingCollaborators] = useState(false);
+
+  const { 
+    notificationsEnabled, 
+    notificationsSupported, 
+    enableNotifications, 
+    disableNotifications 
+  } = useNotifications();
 
   useEffect(() => {
     const fetchLists = async () => {
@@ -280,118 +305,21 @@ const GroceryList = () => {
     }
   };
 
-  const handleInviteCollaborator = async () => {
-    if (!activeList || !collaboratorEmail.trim()) return;
-    
-    setAddingCollaborator(true);
-    
-    try {
-      // Try to update in Supabase first
-      // Get current collaborators
-      const { data, error: fetchError } = await supabase
-        .from('grocery_lists')
-        .select('collaborators')
-        .eq('id', activeList.id)
-        .single();
-        
-      if (fetchError) {
-        console.log('Falling back to localStorage for collaborator update');
-        // Update in localStorage instead
-        const updatedCollaborators = [...(activeList.collaborators || []), collaboratorEmail];
-        updateLocalCollaborators(activeList.id, updatedCollaborators);
-        updateUI(updatedCollaborators);
-      } else {
-        // Update collaborators in Supabase
-        const collaborators = [...(data.collaborators || []), collaboratorEmail];
-        
-        const { error: updateError } = await supabase
-          .from('grocery_lists')
-          .update({ collaborators })
-          .eq('id', activeList.id);
-          
-        if (updateError) {
-          console.log('Supabase update failed, falling back to localStorage');
-          // Update in localStorage instead
-          updateLocalCollaborators(activeList.id, collaborators);
-        }
-        
-        // Update UI regardless
-        updateUI(collaborators);
-      }
-      
-      toast({
-        title: "Invitation sent",
-        description: `${collaboratorEmail} has been invited to collaborate on this list.`,
-      });
-      
-      setCollaboratorEmail("");
-    } catch (error) {
-      console.error('Error inviting collaborator:', error);
-      
-      // Fallback to localStorage
-      const updatedCollaborators = [...(activeList.collaborators || []), collaboratorEmail];
-      updateLocalCollaborators(activeList.id, updatedCollaborators);
-      updateUI(updatedCollaborators);
-      
-      toast({
-        title: "Invitation saved locally",
-        description: "Invitation will be sent when connection is restored.",
-      });
-      
-      setCollaboratorEmail("");
-    } finally {
-      setAddingCollaborator(false);
-    }
+  const handleInviteCollaborator = (event?: React.MouseEvent<HTMLButtonElement>) => {
+    setShowCollaboratorInvite(true);
   };
   
-  // Helper function to update collaborators in localStorage
-  const updateLocalCollaborators = (listId: string, collaborators: string[]) => {
-    try {
-      const localLists = JSON.parse(localStorage.getItem('grocery_lists') || '[]');
-      const updatedLists = localLists.map((list: any) => {
-        if (list.id === listId) {
-          return {
-            ...list,
-            collaborators
-          };
-        }
-        return list;
-      });
-      
-      localStorage.setItem('grocery_lists', JSON.stringify(updatedLists));
-    } catch (error) {
-      console.error('Error updating collaborators in localStorage:', error);
-    }
-  };
-  
-  // Helper function to update UI
-  const updateUI = (collaborators: string[]) => {
-    // Update local state
-    setLists(prevLists => 
-      prevLists.map(list => {
-        if (list.id === activeList?.id) {
-          return {
-            ...list,
-            collaborators
-          };
-        }
-        return list;
-      })
-    );
-    
-    setActiveList(prevList => {
-      if (!prevList) return null;
-      return {
-        ...prevList,
-        collaborators
-      };
-    });
+  const handleCancelCollaborator = () => {
+    setCollaboratorEmail("");
+    setAddingCollaborator(false);
   };
 
-  const handleShare = () => {
+  const handleShareList = () => {
     if (!activeList) return;
     
-    navigator.clipboard.writeText(`https://grocery-assist.vercel.app/share-list/${activeList.id}`).then(() => {
+    const shareUrl = `${window.location.origin}/share-list/${activeList.id}`;
+    
+    navigator.clipboard.writeText(shareUrl).then(() => {
       toast({
         title: "Link copied",
         description: "The list sharing link has been copied to your clipboard.",
@@ -447,6 +375,253 @@ const GroceryList = () => {
     // Just navigate to the home page
     // The search context will take care of restoring search results and scroll position
     navigate('/');
+  };
+
+  // Fetch collaborators with detailed information
+  const fetchDetailedCollaborators = async (listId: string) => {
+    if (!listId) return;
+    
+    setIsLoadingCollaborators(true);
+    
+    try {
+      // Get the list with collaboration details
+      const { data, error } = await supabase
+        .from('grocery_lists')
+        .select('collaboration_details')
+        .eq('id', listId)
+        .single();
+        
+      if (error) {
+        console.error('Error fetching collaboration details:', error);
+        return;
+      }
+      
+      if (data?.collaboration_details) {
+        setDetailedCollaborators(data.collaboration_details);
+      }
+    } catch (error) {
+      console.error('Error in fetchDetailedCollaborators:', error);
+    } finally {
+      setIsLoadingCollaborators(false);
+    }
+  };
+  
+  // Fetch collaborators when the active list changes
+  useEffect(() => {
+    if (activeList?.id) {
+      fetchDetailedCollaborators(activeList.id);
+    }
+  }, [activeList?.id]);
+  
+  // Handle viewing the collaborators list
+  const handleViewCollaborators = () => {
+    if (activeList) {
+      fetchDetailedCollaborators(activeList.id);
+      setShowCollaboratorsList(true);
+    }
+  };
+  
+  // Handle removing a collaborator
+  const handleRemoveCollaborator = async (email: string) => {
+    if (!activeList || !user) return;
+    
+    try {
+      // Get current collaboration details
+      const { data, error: fetchError } = await supabase
+        .from('grocery_lists')
+        .select('collaborators, collaboration_details')
+        .eq('id', activeList.id)
+        .single();
+        
+      if (fetchError) {
+        console.error('Error fetching list for collaborator removal:', fetchError);
+        return;
+      }
+      
+      // Remove from both arrays
+      const simpleCollaborators = (data.collaborators || []).filter(
+        (e: string) => e.toLowerCase() !== email.toLowerCase()
+      );
+      
+      const detailedCollaborators = (data.collaboration_details || []).filter(
+        (c: Collaborator) => c.email.toLowerCase() !== email.toLowerCase()
+      );
+      
+      // Update the list in Supabase
+      const { error: updateError } = await supabase
+        .from('grocery_lists')
+        .update({ 
+          collaborators: simpleCollaborators,
+          collaboration_details: detailedCollaborators
+        })
+        .eq('id', activeList.id);
+        
+      if (updateError) {
+        console.error('Error removing collaborator:', updateError);
+        toast({
+          title: "Error",
+          description: "Failed to remove collaborator. Please try again.",
+          variant: "destructive"
+        });
+        return;
+      }
+      
+      // Update UI
+      setDetailedCollaborators(detailedCollaborators);
+      
+      // Update local state for the active list
+      setActiveList(prevList => {
+        if (!prevList) return null;
+        return {
+          ...prevList,
+          collaborators: simpleCollaborators
+        };
+      });
+      
+      // Also update the lists array
+      setLists(prevLists => 
+        prevLists.map(list => {
+          if (list.id === activeList.id) {
+            return {
+              ...list,
+              collaborators: simpleCollaborators
+            };
+          }
+          return list;
+        })
+      );
+      
+      toast({
+        title: "Collaborator removed",
+        description: `${email} has been removed from this list.`
+      });
+      
+      // Record this activity
+      await recordListActivity(activeList.id, user.id, {
+        action: 'removed',
+        itemName: email,
+        userId: user.id,
+        userEmail: user.email || 'Owner'
+      });
+    } catch (error) {
+      console.error('Error removing collaborator:', error);
+      toast({
+        title: "Error",
+        description: "Failed to remove collaborator. Please try again.",
+        variant: "destructive"
+      });
+    }
+  };
+  
+  // Handle resending an invitation
+  const handleResendInvitation = async (email: string) => {
+    if (!activeList || !user) return;
+    
+    try {
+      toast({
+        title: "Invitation resent",
+        description: `Invitation has been resent to ${email}.`
+      });
+      
+      // In a production app, you would call your server to resend the email
+      console.log(`Resending invitation to ${email} for list ${activeList.id}`);
+    } catch (error) {
+      console.error('Error resending invitation:', error);
+      toast({
+        title: "Error",
+        description: "Failed to resend invitation. Please try again.",
+        variant: "destructive"
+      });
+    }
+  };
+  
+  // Handle updating a list item with notifications
+  const updateListItemWithNotification = async (listId: string, itemId: string, updates: Partial<GroceryItem>) => {
+    await updateListItem(listId, itemId, updates);
+    
+    if (user && activeList) {
+      // Record this activity for notifications
+      const item = activeList.items.find(i => i.id === itemId);
+      const actionType = updates.checked !== undefined 
+        ? (updates.checked ? 'checked' : 'unchecked')
+        : 'updated';
+      
+      await recordListActivity(listId, user.id, {
+        action: actionType,
+        itemName: item?.productData?.name || 'an item',
+        itemId,
+        userId: user.id,
+        userEmail: user.email || 'Unknown user'
+      });
+    }
+  };
+  
+  // Handle removing a list item with notifications
+  const removeListItemWithNotification = async (listId: string, itemId: string) => {
+    if (user && activeList) {
+      // Get the item name before removing it
+      const item = activeList.items.find(i => i.id === itemId);
+      
+      await removeListItem(listId, itemId);
+      
+      // Record this activity for notifications
+      await recordListActivity(listId, user.id, {
+        action: 'removed',
+        itemName: item?.productData?.name || 'an item',
+        itemId,
+        userId: user.id,
+        userEmail: user.email || 'Unknown user'
+      });
+    } else {
+      await removeListItem(listId, itemId);
+    }
+  };
+  
+  // Determine if the current user is the owner of the list
+  const isListOwner = activeList && user ? activeList.createdBy === user.id : false;
+  
+  // Make share menu options more accessible in the UI
+  const renderShareOptions = () => {
+    if (!activeList) return null;
+    
+    return (
+      <div className="flex items-center gap-2 mt-4 mb-2">
+        <Button 
+          variant="outline" 
+          size="sm" 
+          onClick={handleInviteCollaborator}
+          className="flex-1"
+        >
+          <UserPlus className="mr-2 h-4 w-4" />
+          Invite
+        </Button>
+        
+        <Button 
+          variant="outline" 
+          size="sm" 
+          onClick={handleShareList}
+          className="flex-1"
+        >
+          <Share2 className="mr-2 h-4 w-4" />
+          Copy Link
+        </Button>
+        
+        {notificationsSupported && (
+          <Button 
+            variant="outline" 
+            size="icon" 
+            onClick={notificationsEnabled ? disableNotifications : enableNotifications}
+            title={notificationsEnabled ? "Disable notifications" : "Enable notifications"}
+          >
+            {notificationsEnabled ? (
+              <Bell className="h-4 w-4" />
+            ) : (
+              <BellOff className="h-4 w-4" />
+            )}
+          </Button>
+        )}
+      </div>
+    );
   };
 
   if (loading) {
@@ -557,21 +732,7 @@ const GroceryList = () => {
                   </div>
                   
                   <div className="flex items-center gap-2">
-                    <Button 
-                      variant="outline" 
-                      size="icon" 
-                      className="rounded-full"
-                      onClick={handleShare}
-                    >
-                      <Share2 className="h-4 w-4" />
-                    </Button>
-                    <Button 
-                      variant="outline" 
-                      size="icon" 
-                      className="rounded-full"
-                    >
-                      <Settings className="h-4 w-4" />
-                    </Button>
+                    {renderShareOptions()}
                   </div>
                 </CardHeader>
                 
@@ -811,6 +972,70 @@ const GroceryList = () => {
           </div>
         </div>
       </div>
+      
+      {/* Add the collaboration components where appropriate */}
+      {activeList && (
+        <>
+          {/* Share and collaboration options */}
+          {renderShareOptions()}
+          
+          {/* List items... */}
+          {/* ... */}
+          
+          {/* Collaborator dialog components */}
+          {user && activeList && (
+            <>
+              <CollaboratorInvite
+                listId={activeList.id}
+                userId={user.id}
+                open={showCollaboratorInvite}
+                setOpen={setShowCollaboratorInvite}
+                existingCollaborators={detailedCollaborators}
+                simpleCollaborators={activeList.collaborators || []}
+                onSuccess={() => {
+                  // Refresh collaborators list
+                  fetchDetailedCollaborators(activeList.id);
+                }}
+              />
+              
+              {/* Add a button to show collaborators */}
+              {(activeList.collaborators?.length > 0 || detailedCollaborators.length > 0) && (
+                <div className="mt-6">
+                  <Button 
+                    variant="outline" 
+                    onClick={handleViewCollaborators}
+                    className="w-full"
+                  >
+                    <UserPlus className="mr-2 h-4 w-4" />
+                    View Collaborators ({activeList.collaborators?.length || detailedCollaborators.length})
+                  </Button>
+                  
+                  {/* Modal/Dialog to show collaborators list */}
+                  <Dialog open={showCollaboratorsList} onOpenChange={setShowCollaboratorsList}>
+                    <DialogContent className="sm:max-w-[500px]">
+                      <DialogHeader>
+                        <DialogTitle>List Collaborators</DialogTitle>
+                      </DialogHeader>
+                      
+                      <CollaboratorsList
+                        collaborators={detailedCollaborators}
+                        simpleCollaborators={activeList.collaborators}
+                        isOwner={isListOwner}
+                        onRemove={handleRemoveCollaborator}
+                        onResend={handleResendInvitation}
+                        onAddClick={() => {
+                          setShowCollaboratorsList(false);
+                          setShowCollaboratorInvite(true);
+                        }}
+                      />
+                    </DialogContent>
+                  </Dialog>
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
     </div>
   );
 };
