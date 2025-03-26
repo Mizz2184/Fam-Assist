@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Product } from "@/lib/types/store";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Plus, Check, ExternalLink, Package } from "lucide-react";
+import { Plus, Check, ExternalLink, Package, Image as ImageIcon } from "lucide-react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/use-toast";
@@ -22,12 +22,37 @@ export const ProductCard = ({
   onAddToList
 }: ProductCardProps) => {
   const [isAdding, setIsAdding] = useState(false);
+  const [imageError, setImageError] = useState(false);
+  const [processedImageUrl, setProcessedImageUrl] = useState('');
   const { toast } = useToast();
   const { translateText, isTranslated } = useTranslation();
 
+  // Process image URL when product changes
+  useEffect(() => {
+    // Reset image error state
+    setImageError(false);
+    
+    // Check if image URL exists
+    if (!product.imageUrl) {
+      setProcessedImageUrl('');
+      return;
+    }
+    
+    // Handle different URL formats
+    let url = product.imageUrl;
+    
+    // If URL doesn't start with 'http' or 'https', add 'https:' prefix
+    if (!url.startsWith('http')) {
+      url = `https:${url}`;
+    }
+    
+    // Set the processed URL
+    setProcessedImageUrl(url);
+  }, [product.imageUrl]);
+  
   // Debug log to check product data
   console.log('Product in ProductCard:', product);
-  console.log('Image URL:', product.imageUrl);
+  console.log('Image URL:', processedImageUrl);
 
   const handleAddToList = async () => {
     if (!onAddToList) return;
@@ -93,15 +118,23 @@ export const ProductCard = ({
   return (
     <Card className="overflow-hidden h-full flex flex-col">
       <div className="relative aspect-square overflow-hidden bg-muted/30">
-        {product.imageUrl ? (
+        {processedImageUrl && !imageError ? (
           <img 
-            src={product.imageUrl} 
+            src={processedImageUrl} 
             alt={isTranslated ? translateText(product.name) : product.name} 
             className="w-full h-full object-cover transition-transform hover:scale-105"
+            onError={() => setImageError(true)}
+            loading="lazy"
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-muted-foreground">
-            {isTranslated ? "No image" : translateText("Sin imagen")}
+          <div className="w-full h-full flex flex-col items-center justify-center text-muted-foreground bg-slate-100 dark:bg-slate-800">
+            <ImageIcon className="h-12 w-12 mb-2 opacity-50" />
+            <span className="text-sm">
+              {isTranslated ? "Product image" : translateText("Imagen del producto")}
+            </span>
+            <span className="text-xs max-w-[80%] text-center mt-1 opacity-70">
+              {product.name}
+            </span>
           </div>
         )}
         <div className="absolute top-2 right-2">

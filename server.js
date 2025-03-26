@@ -158,12 +158,18 @@ app.post('/api/proxy/maxipali/search', async (req, res) => {
         
         console.log(`Product ${p.productName} price:`, price);
         
+        // Get image URL and ensure it's a valid URL
+        let imageUrl = p.items?.[0]?.images?.[0]?.imageUrl || '';
+        if (imageUrl && !imageUrl.startsWith('http')) {
+          imageUrl = `https:${imageUrl}`;
+        }
+        
         return {
           id: p.productId,
           name: p.productName,
           brand: p.brand,
           price: price,
-          imageUrl: p.items?.[0]?.images?.[0]?.imageUrl || '',
+          imageUrl: imageUrl,
           store: 'MaxiPali',
           category: p.categories && p.categories[0] ? p.categories[0].split('/').pop() : 'Grocery',
           sku: p.items?.[0]?.itemId || '',
@@ -236,12 +242,18 @@ app.get('/api/proxy/maxipali/barcode/:ean', async (req, res) => {
           convertedPriceType: typeof price
         });
         
+        // Get image URL and ensure it's a valid URL
+        let imageUrl = product.items?.[0]?.images?.[0]?.imageUrl || '';
+        if (imageUrl && !imageUrl.startsWith('http')) {
+          imageUrl = `https:${imageUrl}`;
+        }
+        
         const responseData = {
           id: product.productId,
           name: product.productName,
           brand: product.brand || 'Unknown',
           price: price,
-          imageUrl: product.items?.[0]?.images?.[0]?.imageUrl || '',
+          imageUrl: imageUrl,
           store: 'MaxiPali',
           ean: ean,
           category: product.categories && product.categories[0] ? product.categories[0].split('/').pop() : 'Grocery'
@@ -291,12 +303,18 @@ app.get('/api/proxy/maxipali/barcode/:ean', async (req, res) => {
           convertedPriceType: typeof price
         });
         
+        // Get image URL and ensure it's a valid URL
+        let imageUrl = product.items?.[0]?.images?.[0]?.imageUrl || '';
+        if (imageUrl && !imageUrl.startsWith('http')) {
+          imageUrl = `https:${imageUrl}`;
+        }
+        
         const responseData = {
           id: product.productId,
           name: product.productName,
           brand: product.brand || 'Unknown',
           price: price,
-          imageUrl: product.items?.[0]?.images?.[0]?.imageUrl || '',
+          imageUrl: imageUrl,
           store: 'MaxiPali',
           ean: ean,
           category: product.categories && product.categories[0] ? product.categories[0].split('/').pop() : 'Grocery'
@@ -392,12 +410,18 @@ app.get('/api/proxy/maxipali/barcode/:ean', async (req, res) => {
         convertedPriceType: typeof price
       });
       
+      // Get image URL and ensure it's a valid URL
+      let imageUrl = product.image || '';
+      if (imageUrl && !imageUrl.startsWith('http')) {
+        imageUrl = `https:${imageUrl}`;
+      }
+      
       const transformedData = {
         id: product.productId,
         name: product.productName || 'Unknown Product',
         brand: product.brand || 'Unknown',
         price: price,
-        imageUrl: product.items?.[0]?.images?.[0]?.imageUrl || '',
+        imageUrl: imageUrl,
         store: 'MaxiPali',
         ean: ean,
         category: 'Grocery',
@@ -467,18 +491,26 @@ app.get('/api/maxipali/search', async (req, res) => {
 
     // Transform response to match our format
     const transformedData = {
-      products: (searchResponse.data || []).map(p => ({
-        id: p.productId,
-        name: p.productName,
-        brand: p.brand,
-        price: p.items[0]?.sellers[0]?.commertialOffer?.Price || 0,
-        imageUrl: p.items[0]?.images[0]?.imageUrl || '',
-        store: 'MaxiPali',
-        category: p.categories && p.categories[0] ? p.categories[0].split('/').pop() : 'Grocery',
-        sku: p.items[0]?.itemId || '',
-        barcode: p.items[0]?.ean || '',
-        inStock: true
-      })),
+      products: (searchResponse.data || []).map(p => {
+        // Get image URL and ensure it's a valid URL
+        let imageUrl = p.items[0]?.images[0]?.imageUrl || '';
+        if (imageUrl && !imageUrl.startsWith('http')) {
+          imageUrl = `https:${imageUrl}`;
+        }
+        
+        return {
+          id: p.productId,
+          name: p.productName,
+          brand: p.brand,
+          price: p.items[0]?.sellers[0]?.commertialOffer?.Price || 0,
+          imageUrl: imageUrl,
+          store: 'MaxiPali',
+          category: p.categories && p.categories[0] ? p.categories[0].split('/').pop() : 'Grocery',
+          sku: p.items[0]?.itemId || '',
+          barcode: p.items[0]?.ean || '',
+          inStock: true
+        };
+      }),
       total: searchResponse.data?.length || 0,
       page: parseInt(page),
       pageSize: parseInt(pageSize),
@@ -753,10 +785,21 @@ app.get('/api/health', (req, res) => {
 
 // For local development
 if (process.env.NODE_ENV !== 'production') {
-  const PORT = process.env.PORT || 8080;
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-  });
+  const startServer = (port) => {
+    const server = app.listen(port, () => {
+      console.log(`Server running on port ${port}`);
+    }).on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.log(`Port ${port} is busy, trying ${port + 1}...`);
+        startServer(port + 1);
+      } else {
+        console.error('Server error:', err);
+      }
+    });
+  };
+  
+  const PORT = parseInt(process.env.PORT || '8080', 10);
+  startServer(PORT);
 }
 
 // Export the Express app for Vercel
