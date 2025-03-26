@@ -1,4 +1,21 @@
-# Welcome to your Lovable project
+# Fam-Assist
+
+A price comparison app for grocery shopping in Costa Rica, comparing prices between MaxiPalí and MasxMenos.
+
+## Features
+
+- Search for products across multiple grocery stores
+- Compare prices to find the best deals
+- Create and manage grocery lists
+- User authentication with Google OAuth and email/password
+- Bilingual support (English/Spanish)
+
+## Getting Started
+
+1. Clone the repository
+2. Install dependencies with `npm install`
+3. Copy `.env.example` to `.env` and fill in your API keys
+4. Run the development server with `npm run dev`
 
 ## Project info
 
